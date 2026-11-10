@@ -1,0 +1,73 @@
+# Ancient Jar Hindi short — 10-frame speed test on GitHub Actions
+# PURPOSE: measure the REAL Remotion per-frame speed on an Actions runner BEFORE committing to
+# the full 2,878-frame render. The local VM renders ~90-200 s/frame through the PostDriver
+# (scale-0.25 stills) — the Actions number is unknown and decides the shard count for the
+# full run. Run this FIRST (Actions tab -> Run workflow).
+# EXPECTED: the 10-frame clip `speed-test-10` + a log line "SECONDS_PER_FRAME=<x>".
+# If the clip is blank/black, the browser path is wrong (see the --browser-executable note below).
+# NOTE: workflow files cannot be pushed by a GitHub App token — create this file via the web UI
+# (repo -> Add file -> Create new file -> .github/workflows/render-speed-test.yml, paste, commit).
+name: Ancient Jar speed test (10 frames)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  speed-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install browsers
+        # Full Playwright Chromium is the PROVEN WebGL path (the Remotion headless shell could
+        # not create a WebGL context on our VM; full Chrome with --gl swangle works). Install
+        # both; the render uses the Playwright Chrome explicitly.
+        run: |
+          npx playwright install --with-deps chromium
+          npx remotion browser ensure
+
+      - name: Install ffmpeg (ffprobe)
+        # ubuntu-latest has NO ffprobe/ffmpeg; the render step below calls ffprobe and the blank
+        # check calls ffmpeg. The first Manjhi speed test FAILED on exactly this (exit 127) even
+        # though the render itself had finished. Install BEFORE any ffprobe/ffmpeg call.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Render frames 0-9
+        env:
+          REMOTION_TMP: ${{ runner.temp }}/remotion-tmp
+        run: |
+          CHROME=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)
+          echo "Chrome: $CHROME"
+          mkdir -p out
+          START=$(date +%s)
+          npx remotion render src/index.ts AncientJar out/speed-test-10.mp4 \
+            --codec h264 --crf 16 --scale 1.0 --frames=0-9 --gl swangle --overwrite \
+            --browser-executable="$CHROME"
+          END=$(date +%s)
+          SECONDS=$((END - START))
+          echo "RENDER_SECONDS=$SECONDS for 10 frames"
+          echo "SECONDS_PER_FRAME=$(python3 -c "print(round($SECONDS/10, 2))")"
+          ffprobe -v error -show_entries stream=width,height,r_frame_rate,nb_frames,duration \
+            -of default=noprint_wrappers=1 out/speed-test-10.mp4
+
+      - name: Blank check (frames must vary, not one flat colour)
+        # A blank render has YDIF ~ 0 (no change between frames). Prints YAVG/YDIF per frame;
+        # YDIF must be clearly > 0. The clip itself is also uploaded for a visual check.
+        run: |
+          ffmpeg -i out/speed-test-10.mp4 -vf signalstats -f null - 2>&1 | grep -o "YAVG:[0-9.]* YDIF:[0-9.]*" | head -5
+
+      - name: Upload 10-frame clip
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed-test-10
+          path: out/speed-test-10.mp4
+          retention-days: 1
