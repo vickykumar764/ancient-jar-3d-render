@@ -15,10 +15,17 @@ import { Pool, Actor, Fx, stage } from "./cast";
 import { FPS, D0, SHOTS, ShotDef, V3, smooth, clamp01, camAt, jarState, JarState, FOREGROUND, JAR, THRONE, BANQUET, HILL, CUTJAR } from "./story";
 
 // ---------------- assets ----------------
-// NOTE: public/bridge/kenney/ does not exist in this project (no GLB on disk at all), so every load below
-// fails gracefully (bridge loader catches per file) and loadKit resolves to an empty Kit. Nothing essential
-// depends on it: trees/bushes/banners are drawn as cartoon geometry by build.ts prop()/kitClone(), and the
-// world geometry is all primitives. If the GLBs are ever copied in, the kit props start appearing.
+// NOTE: 8 of these GLBs are on disk under public/bridge/kenney/ (Kenney Nature Kit, CC0 — the 5 trees +
+// 3 bushes). The other 11 are NOT files and never will be: tree-high-round / tree / hedge and the other
+// veg names are drawn as cartoon geometry by build.ts prop()/kitClone() (VEG map), banner-red/green are
+// painted cloth, and lantern / cart / stall-red / stall-green / stall-bench / windmill do not exist in
+// Kenney's catalog under those filenames (checked across 8 kits) — build.ts draws lantern/cart as
+// primitives and silently omits stalls/windmill. So a missing GLB is always cosmetic: every load below
+// fails gracefully (per-file catch) and the world is complete either way.
+// 2026-11-10: the Actions speed test failed at frame 1 with a 33 s seek timeout AFTER the 404s — but
+// the 404s were NOT the cause (a local still of frame 1 renders fine with all 19 missing). The timeout
+// came from the video-mode seek path, so the workflows now render stills (scripts/jar-render-shard.mjs).
+// This loader is hardened anyway: a hung fetch can NEVER block the render (see the 8 s race below).
 const KENNEY = ["tree_oak", "tree_default", "tree_detailed", "tree_fat", "tree_cone", "tree-high-round", "tree",
   "plant_bushLarge", "plant_bushDetailed", "plant_bush", "hedge", "lantern", "cart", "stall-red", "stall-green",
   "banner-red", "banner-green", "windmill", "stall-bench"];
@@ -26,8 +33,15 @@ let kitP: Promise<Kit> | null = null;
 export const loadKit = () => {
   if (!kitP) {
     const loader = new GLTFLoader();
-    kitP = Promise.all(KENNEY.map((n) => loader.loadAsync(staticFile(`bridge/kenney/${n}.glb`)).then((g) => [n, g.scene] as const).catch(() => [n, null] as const)))
+    const loaded = Promise.all(KENNEY.map((n) => loader.loadAsync(staticFile(`bridge/kenney/${n}.glb`)).then((g) => [n, g.scene] as const).catch(() => [n, null] as const)))
       .then((list) => Object.fromEntries(list.filter((e) => e[1]).map(([n, s]) => [n, s!])) as Kit);
+    // Hard guarantee: whatever happens to a fetch, this promise settles. A healthy load is < 1 s
+    // and a 404 rejects immediately; if anything ever hangs, resolve with an empty kit after 8 s
+    // (the world is complete without the kit — see the NOTE above). Without this, a single hung
+    // fetch would leave the delayRender("bridge kit") handle open forever and Remotion's seek
+    // would time out after 33 s. The background loads keep running; their late result is ignored.
+    const fallback = new Promise<Kit>((resolve) => setTimeout(() => resolve({} as Kit), 8000));
+    kitP = Promise.race([loaded, fallback]);
   }
   return kitP;
 };
