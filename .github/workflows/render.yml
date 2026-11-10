@@ -1,4 +1,10 @@
 # Ancient Jar Hindi short — FULL render on GitHub Actions (20 parallel jobs)
+# RENDER METHOD (2026-11-10): STILLS, not `remotion render` (see the note at the top of the brief —
+# video mode failed the speed test with a seek-to-frame-1 timeout and tiles frames 1+ at 1080x1920
+# under SwiftShader). Each frame is rendered as a still (fresh browser page) by
+# scripts/jar-render-shard.mjs and encoded to mp4 with ffmpeg. Output specs unchanged: 1080x1920,
+# 30fps, h264 crf 16. Expected cost ~15-25 s/frame on Actions, so a 144-frame shard takes
+# ~35-60 min — well within the 6 h job limit.
 # RUN ONLY AFTER the speed test (render-speed-test.yml) has measured the per-frame seconds.
 # Shard math: 2,878 frames / 20 jobs = 144 frames/job (shard 19 renders 142: 2736-2877).
 # If the speed test shows >~60 s/frame, 144-frame jobs take >2.4 h each — still fine (6 h job
@@ -43,29 +49,14 @@ jobs:
         # BEFORE any ffprobe call.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      - name: Render shard ${{ matrix.shard }}
+      - name: Render shard ${{ matrix.shard }} (stills + ffmpeg)
         env:
           REMOTION_TMP: ${{ runner.temp }}/remotion-tmp
         run: |
           CHROME=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)
           echo "Chrome: $CHROME"
-          SHARD=${{ matrix.shard }}
-          START=$((SHARD * 144))
-          END=$((START + 143))
-          if [ $END -gt 2877 ]; then END=2877; fi
-          FRAMES=$((END - START + 1))
-          echo "Shard $SHARD: frames $START-$END ($FRAMES frames)"
           mkdir -p out
-          T0=$(date +%s)
-          npx remotion render src/index.ts AncientJar out/part-$SHARD.mp4 \
-            --codec h264 --crf 16 --scale 1.0 --frames=$START-$END --gl swangle --overwrite \
-            --browser-executable="$CHROME"
-          T1=$(date +%s)
-          SECONDS=$((T1 - T0))
-          echo "Shard $SHARD: RENDER_SECONDS=$SECONDS for $FRAMES frames"
-          echo "Shard $SHARD: SECONDS_PER_FRAME=$(python3 -c "print(round($SECONDS/$FRAMES, 2))")"
-          ffprobe -v error -show_entries stream=width,height,nb_frames,duration \
-            -of default=noprint_wrappers=1 out/part-$SHARD.mp4
+          JAR_CHROME="$CHROME" node scripts/jar-render-shard.mjs ${{ matrix.shard }} 20 --out out/part-${{ matrix.shard }}.mp4
 
       - name: Upload shard clip
         uses: actions/upload-artifact@v4
