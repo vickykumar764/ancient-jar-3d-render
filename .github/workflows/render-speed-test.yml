@@ -1,10 +1,16 @@
 # Ancient Jar Hindi short — 10-frame speed test on GitHub Actions
-# PURPOSE: measure the REAL Remotion per-frame speed on an Actions runner BEFORE committing to
-# the full 2,878-frame render. The local VM renders ~90-200 s/frame through the PostDriver
-# (scale-0.25 stills) — the Actions number is unknown and decides the shard count for the
-# full run. Run this FIRST (Actions tab -> Run workflow).
-# EXPECTED: the 10-frame clip `speed-test-10` + a log line "SECONDS_PER_FRAME=<x>".
-# If the clip is blank/black, the browser path is wrong (see the --browser-executable note below).
+# RENDER METHOD (2026-11-10): STILLS, not `remotion render` (see the note at the top of the brief).
+# The first speed test FAILED in video mode (seek-to-frame-1 timeout, 33 s) even though the scene and
+# asset loading are healthy (local renderStill of frame 1 is correct). Each frame is therefore rendered
+# as a still (fresh browser page) by scripts/jar-render-shard.mjs and encoded to mp4 with ffmpeg.
+# PURPOSE: measure the REAL per-frame speed on an Actions runner BEFORE committing to the full
+# 2,878-frame render, AND verify the frames are NOT tiled. Expected ~15-25 s/frame on Actions
+# (browser launch + page load + world build + render per frame), so 10 frames take ~3-5 min.
+# EXPECTED: the 10-frame clip `speed-test-10` + a log line "STILLS_DONE frames=10
+# RENDER_SECONDS=<x> SECONDS_PER_FRAME=<y>".
+# Then CHECK EVERY FRAME of the clip visually for tiling (a vertically repeated image, seam at ~88%
+# width) — the stills method is the fix for that defect, so the speed test must prove every frame is
+# clean before the full render runs.
 # NOTE: workflow files cannot be pushed by a GitHub App token — create this file via the web UI
 # (repo -> Add file -> Create new file -> .github/workflows/render-speed-test.yml, paste, commit).
 name: Ancient Jar speed test (10 frames)
@@ -41,23 +47,14 @@ jobs:
         # though the render itself had finished. Install BEFORE any ffprobe/ffmpeg call.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
 
-      - name: Render frames 0-9
+      - name: Render frames 0-9 (stills + ffmpeg)
         env:
           REMOTION_TMP: ${{ runner.temp }}/remotion-tmp
         run: |
           CHROME=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)
           echo "Chrome: $CHROME"
           mkdir -p out
-          START=$(date +%s)
-          npx remotion render src/index.ts AncientJar out/speed-test-10.mp4 \
-            --codec h264 --crf 16 --scale 1.0 --frames=0-9 --gl swangle --overwrite \
-            --browser-executable="$CHROME"
-          END=$(date +%s)
-          SECONDS=$((END - START))
-          echo "RENDER_SECONDS=$SECONDS for 10 frames"
-          echo "SECONDS_PER_FRAME=$(python3 -c "print(round($SECONDS/10, 2))")"
-          ffprobe -v error -show_entries stream=width,height,r_frame_rate,nb_frames,duration \
-            -of default=noprint_wrappers=1 out/speed-test-10.mp4
+          JAR_CHROME="$CHROME" node scripts/jar-render-shard.mjs --frames 0-9 --out out/speed-test-10.mp4
 
       - name: Blank check (frames must vary, not one flat colour)
         # A blank render has YDIF ~ 0 (no change between frames). Prints YAVG/YDIF per frame;
